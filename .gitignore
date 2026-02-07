@@ -1,0 +1,15 @@
+# --- Python Garbage ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual Environments (NEVER UPLOAD THESE) ---
+venv/
+env/
+.env
+
+# --- VS Code Settings ---
+.vscode/
+
+# --- Docker Junk ---
+*.log
