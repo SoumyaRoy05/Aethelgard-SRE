@@ -70,6 +70,7 @@ Reason: Trust but Verify. AI sometimes makes mistakes. We never deploy a fix unl
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------## chaos_service.py ##--------------------------------------------------------------------------------
 
+Directory containing the FastAPI code
 
 What does chaos_service.py do?
 
@@ -82,7 +83,7 @@ This script creates a web server that intentionally has a split personality.
 
 In the software world, this is called "High Throughput" or "Concurrency."
 
-* When Sabotaged: It switches to "bad code" (a blocking sleep timer) that freezes the entire server.
+* When Sabotaged: It switches to "bad code" (a blocking sleep timer) that freezes the entire server.           
                   "Sabotage" is a simulation
 
 In simple terms: It is a "Digital Mechanic" that lives inside your server.
@@ -178,6 +179,8 @@ Docker creates a brand new, empty Linux computer. It doesn't know you need fasta
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------## Dockerfile ##--------------------------------------------------------------------------------------------------------
 
+Blueprint to build your Linux container
+
 What does the Dockerfile do?
 
 A blueprint for building a mini-computer (Container) that runs your code. It is like a recipe that says:
@@ -203,6 +206,25 @@ docker build: "Hey Docker, read the Dockerfile."
 -t aethelgard-chaos: "Tag (name) this image 'aethelgard-chaos'."
 .: "Look for the Dockerfile in the current directory."
 
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------## Phase 2: The Sentinel (The "Nervous System") ##----------------------------------------------------------------------------
+
+What does the Sentinel do?
+
+The Sentinel is a Python script that continuously monitors the health of the web server (chaos_service.py) by sending requests to its /health endpoint every second.
+It collects latency data and uses statistical analysis (Z-Score) to detect anomalies in real-time.
+If it detects a significant increase in latency, it flags an "Anomaly," which triggers the next steps in the automated bug-fixing process.
+
+The Goal: We need a script that watches your chaos_service 24/7.
+
+Regular approach: if latency > 1 second --> print("Error") (This is brittle. What if 1.1s is normal for a heavy query?)
+My Approach: Statistical Process Control --> We will use a Rolling Z-Score.
+
+The Logic: Your Sentinel will calculate the Average and Standard Deviation of the last 20 requests.
+
+If latency is 0.05s, 0.04s, 0.06s --> Normal. Average = 0.05s, Std Dev = 0.01s.
+If latency suddenly hits 1.50s --> Math says this is a 5-Sigma Event (0.0001% chance). --> TRIGGER ALERT.
 
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------## The Interview Pitch (What to say) ##---------------------------------------------------------------------------------
