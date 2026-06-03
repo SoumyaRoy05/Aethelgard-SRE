@@ -1,0 +1,38 @@
+{
+    "incident_id": "INC_20260603_211502",
+    "timestamp": "2026-06-03T21:15:02.058183",
+    "target_endpoint": "http://127.0.0.1:8000/health",
+    "metrics": {
+        "observed_latency_ms": 1262.52,
+        "baseline_mean_ms": 51.83,
+        "baseline_std_dev_ms": 11.578,
+        "calculated_z_score": 104.57,
+        "threshold_sigma": 3.0
+    },
+    "infrastructure_context": {
+        "network_status": "OK",
+        "server_reported_health": "DEGRADED"
+    },
+    "recent_latency_samples": [
+        54.89,
+        63.39,
+        35.29,
+        65.06,
+        49.45,
+        49.16,
+        50.28,
+        64.66,
+        64.43,
+        63.69,
+        35.24,
+        54.38,
+        54.67,
+        64.48,
+        53.38,
+        34.52,
+        59.63,
+        24.43,
+        50.43,
+        45.13
+    ]
+}
