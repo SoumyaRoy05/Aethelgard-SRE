@@ -1,1 +1,2 @@
+# Aethelgard
 Aethelgard is an autonomous, end-to-end Site Reliability Engineering (SRE) copilot designed to bridge the gap between telemetry observability and codebase remediation. Built with Python, FastAPI, and Docker, it continuously monitors streaming traffic, catches performance degradation using rolling statistical Z-Score mathematics, and leverages a local agentic workflow (ChromaDB + Ollama) to engineer and validate self-healing infrastructure patches with zero human intervention.
