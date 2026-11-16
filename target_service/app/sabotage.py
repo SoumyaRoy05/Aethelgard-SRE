@@ -1,40 +1,104 @@
 # target_service/app/sabotage.py
+"""
+Chaos Engineering Harness for Aethelgard Target Microservice.
+Exposes endpoints to simulate real-world microservice runtime regressions.
+"""
 
-# Import the APIRouter module from FastAPI to cleanly isolate and modularize our route configuration.
+import time
 from fastapi import APIRouter
-# Import our centralized system state dictionary so we can programmatically inject simulated failures.
-from app.config import system_state
 
-# Instantiate the routing controller specifically tasked with managing our simulated architecture exploits.
-# By separating this from main.py, we follow enterprise-grade decoupled software design principles.
-router = APIRouter()
+try:
+    from .config import system_state
+except (ImportError, ValueError):
+    try:
+        from target_service.app.config import system_state
+    except ImportError:
+        from app.config import system_state
 
-# Register a POST endpoint to simulate a developer pushing a synchronous blocking I/O error into production.
+router = APIRouter(tags=["Chaos Engineering"])
+
+@router.get("/status")
+def get_service_status():
+    """Returns current internal diagnostics and active incident state."""
+    return {
+        "status": system_state["status"],
+        "incident_type": system_state["incident_type"],
+        "db_pool_available": system_state["db_pool_available"],
+        "memory_leak_chunks": len(system_state["leak_buffer"]),
+        "timestamp": time.time()
+    }
+
 @router.post("/sabotage/blocking-io")
 def sabotage_blocking_io():
-    # Update the core system state flag to alert the monitoring loop that performance is compromised.
+    """
+    Simulates a synchronous blocking I/O call (e.g. time.sleep or synchronous requests.get)
+    inside an async route handler. This starves the single-threaded asyncio event loop.
+    """
     system_state["status"] = "DEGRADED"
-    # Specify the exact incident signature as BLOCKING_IO so the health check path triggers the specific bug.
     system_state["incident_type"] = "BLOCKING_IO"
-    # Return a structured JSON acknowledgement frame back to the testing harness or administrative operator.
-    return {"message": "SYSTEM COMPROMISED: Blocking I/O Incident Triggered"}
+    system_state["incident_start_epoch"] = time.time()
+    return {
+        "message": "SYSTEM COMPROMISED: Blocking I/O Incident Triggered",
+        "incident_type": "BLOCKING_IO",
+        "description": "Synchronous sleep injected into async event loop"
+    }
 
-# Register a POST endpoint to simulate an unoptimized computational loop choking the machine's processor resources.
 @router.post("/sabotage/cpu-bound")
 def sabotage_cpu_bound():
-    # Flag the overall service status state as compromised/degraded in system memory.
+    """
+    Simulates an unoptimized, heavy CPU-bound computation blocking the event loop.
+    """
     system_state["status"] = "DEGRADED"
-    # Configure the active incident parameter to point directly to our mathematical processing stress vector.
     system_state["incident_type"] = "CPU_BOUND"
-    # Send an explicit JSON confirmation back to the orchestrator indicating the CPU execution fault is hot.
-    return {"message": "SYSTEM COMPROMISED: CPU Starvation Incident Triggered"}
+    system_state["incident_start_epoch"] = time.time()
+    return {
+        "message": "SYSTEM COMPROMISED: CPU Starvation Incident Triggered",
+        "incident_type": "CPU_BOUND",
+        "description": "Intense computational spin-loop locking thread"
+    }
 
-# Register a POST endpoint representing the administrative recovery action designed to clear active alerts.
+@router.post("/sabotage/memory-leak")
+def sabotage_memory_leak():
+    """
+    Simulates a rapid memory leak by appending synthetic byte arrays to a global buffer.
+    """
+    system_state["status"] = "DEGRADED"
+    system_state["incident_type"] = "MEMORY_LEAK"
+    system_state["incident_start_epoch"] = time.time()
+    # Allocate 10MB into memory buffer
+    system_state["leak_buffer"].append(b"X" * (10 * 1024 * 1024))
+    return {
+        "message": "SYSTEM COMPROMISED: Memory Leak Injected",
+        "incident_type": "MEMORY_LEAK",
+        "buffer_chunks": len(system_state["leak_buffer"])
+    }
+
+@router.post("/sabotage/pool-exhaustion")
+def sabotage_pool_exhaustion():
+    """
+    Simulates database connection pool exhaustion.
+    """
+    system_state["status"] = "DEGRADED"
+    system_state["incident_type"] = "POOL_EXHAUSTION"
+    system_state["incident_start_epoch"] = time.time()
+    system_state["db_pool_available"] = 0
+    return {
+        "message": "SYSTEM COMPROMISED: DB Connection Pool Exhausted",
+        "incident_type": "POOL_EXHAUSTION",
+        "db_pool_available": 0
+    }
+
 @router.post("/fix")
 def fix_system():
-    # Gracefully restore the global operational state condition back to its pristine "HEALTHY" baseline.
+    """
+    Restores the target microservice back to the healthy operational baseline.
+    """
     system_state["status"] = "HEALTHY"
-    # Wipe the active incident context completely clear so the processing paths return to normal speeds.
     system_state["incident_type"] = None
-    # Provide an auditable JSON response payload confirming successful structural health restoration.
-    return {"message": "SYSTEM RESTORED: All operations normal"}
+    system_state["incident_start_epoch"] = None
+    system_state["leak_buffer"].clear()
+    system_state["db_pool_available"] = system_state["db_pool_max"]
+    return {
+        "message": "SYSTEM RESTORED: All operations normalized to baseline",
+        "status": "HEALTHY"
+    }

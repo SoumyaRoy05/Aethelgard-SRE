@@ -1,13 +1,23 @@
 # target_service/app/config.py
+"""
+Aethelgard Target Microservice - Runtime State Configuration
+Tracks runtime system performance state, active chaos experiments, and mock dependencies.
+"""
 
-# A global dictionary configuration instance acting as an in-memory operational database.
 system_state = {
-    # Tracks the overall health status of the microservice. Can be "HEALTHY" or "DEGRADED".
+    # System health baseline: "HEALTHY" or "DEGRADED"
     "status": "HEALTHY",
     
-    # A multiplier tracking the severity of system degradation. Used to adjust processing delays.
-    "degradation_factor": 0.0,
+    # Active chaos incident signature: None, "BLOCKING_IO", "CPU_BOUND", "MEMORY_LEAK", "POOL_EXHAUSTION"
+    "incident_type": None,
     
-    # Stores the specific identifier of the active SRE incident scenario: "BLOCKING_IO" or "CPU_BOUND".
-    "incident_type": None
+    # Track when the current incident was injected
+    "incident_start_epoch": None,
+    
+    # In-memory memory leak buffer for simulation
+    "leak_buffer": [],
+    
+    # Mock database connection pool state
+    "db_pool_available": 10,
+    "db_pool_max": 10
 }

@@ -1,16 +1,39 @@
-# --- Python Garbage ---
+# --- Python Cache & Bytecode ---
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
 
-# --- Virtual Environments (NEVER UPLOAD THESE) ---
+# --- Virtual Environments ---
 venv/
 env/
+ENV/
 .env
 
-# --- VS Code Settings ---
+# --- IDE Settings ---
 .vscode/
+.idea/
+*.swp
+*.swo
 
-# --- Docker Junk ---
+# --- Docker & Sandbox Workspace ---
+sandbox_workspace/
 *.log
 Overview/
+
+# --- Persistent Local ChromaDB & Incident Reports (Ignore database files, keep structure) ---
+reports/chroma_storage/*
+!reports/chroma_storage/.gitkeep
+
+reports/incident_reports/*.json
+!reports/incident_reports/.gitkeep
+
+reports/incident_reports/processed/*.json
+!reports/incident_reports/processed/.gitkeep
+
+reports/audit_logs/*.json
+reports/audit_logs/*.diff
+!reports/audit_logs/.gitkeep

@@ -1,197 +1,187 @@
 # sentinel/sentinel_engine.py
+"""
+Aethelgard Sentinel Engine
+Continuous real-time observability and statistical anomaly detection layer.
+Computes rolling Z-Scores across time-series latency pings and captures incident traces.
+"""
 
-# Import requests to handle HTTP polling handshakes against the application endpoints.
-import requests
-# Import time to compute performance durations and regulate loop frequencies.
-import time
-# Import numpy as our core data science math engine to handle sliding standard deviations.
-import numpy as np
-# Import os to manage pathing and file verification abstractions.
 import os
-# Import json to serialize structured incident telemetry frames into machine-parseable data.
+import sys
+import time
 import json
-# Import deque to act as our self-cleaning sliding memory array window.
+import signal
+import requests
+import numpy as np
 from collections import deque
-# Import datetime to attach precise, human-auditable timestamps to system errors.
 from datetime import datetime
 
-# --- SYSTEM CONFIGURATION TUNING KNOBS ---
-# The target destination route we are monitoring, pointing to our local FastAPI microservice.
-TARGET_URL = "http://127.0.0.1:8000/health"
-# The size of our data queue. The Sentinel looks back at the last 20 pings to calculate what is "normal".
-WINDOW_SIZE = 20
-# Sensitivity matrix boundary. A Z-score exceeding 3.0 represents an extreme 3-sigma anomaly (99.7% confidence).
-Z_SCORE_THRESHOLD = 3.0
+# Load optional .env variables if present
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
-# Dynamic path resolution to find the master project root path regardless of execution origin shell.
+# --- SYSTEM CONFIGURATION (ENVIRONMENT OVERRIDABLE) ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TARGET_URL = os.getenv("TARGET_SERVICE_URL", "http://127.0.0.1:8000/health")
+WINDOW_SIZE = int(os.getenv("SENTINEL_WINDOW_SIZE", "20"))
+Z_SCORE_THRESHOLD = float(os.getenv("SENTINEL_Z_SCORE_THRESHOLD", "3.0"))
+POLL_INTERVAL = float(os.getenv("SENTINEL_POLL_INTERVAL_SECONDS", "1.0"))
 INCIDENT_REPORT_DIR = os.path.join(BASE_DIR, "reports", "incident_reports")
 
 class PolishedSentinel:
-    def __init__(self):
-        # Instantiate our sliding time-series data window. Maxlen automatically pops old entries.
-        self.latency_window = deque(maxlen=WINDOW_SIZE)
-        # Operational latch flag to guarantee alert deduplication and prevent file spamming.
+    def __init__(self, target_url=TARGET_URL, window_size=WINDOW_SIZE, threshold=Z_SCORE_THRESHOLD):
+        self.target_url = target_url
+        self.window_size = window_size
+        self.threshold = threshold
+        self.latency_window = deque(maxlen=self.window_size)
         self.is_incident_active = False
-        
-        # Programmatically ensure the shared reporting workspace exists before running polls.
+        self.running = True
+
         os.makedirs(INCIDENT_REPORT_DIR, exist_ok=True)
-        
-        print(f"[{datetime.now()}] 🛡️ Aethelgard Sentinel Engine safely initialized.")
-        print(f"[{datetime.now()}] 📊 Monitoring target destination: {TARGET_URL}")
+
+        # Wire graceful shutdown handlers
+        signal.signal(signal.SIGINT, self._handle_exit)
+        signal.signal(signal.SIGTERM, self._handle_exit)
+
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🛡️  Aethelgard Sentinel Engine Initialized.")
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 📊 Target: {self.target_url} | Window: {self.window_size} | Threshold: {self.threshold}σ")
+
+    def _handle_exit(self, signum, frame):
+        print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🛑 Sentinel shutting down cleanly...")
+        self.running = False
+        sys.exit(0)
 
     def fetch_telemetry(self):
         """
-        Harvests high-frequency round-trip response metrics from the monitored microservice.
-        Features robust exception boundaries to handle complete timeouts and network failure states.
+        Polls target microservice and returns (latency_ms, network_status, server_status).
+        Enforces defensive timeouts to handle hung/frozen threads without stalling the sentinel.
         """
         try:
-            # Capture microsecond precise snapshot right before launching the HTTP GET handshake.
             start_time = time.time()
-            # Issue request. timeout=3.0 handles frozen threads gracefully before the sentinel hangs.
-            response = requests.get(TARGET_URL, timeout=3.0)
-            # Capture microsecond precise snapshot upon completion.
-            end_time = time.time()
-            
-            # Formulate full delta calculation and convert raw seconds to milliseconds.
-            latency_ms = (end_time - start_time) * 1000
-            
-            # Default server reporting value. Attempt to extract internal state telemetry variables.
+            response = requests.get(self.target_url, timeout=3.0)
+            latency_ms = (time.time() - start_time) * 1000
+
             server_reported_status = "UNKNOWN"
             try:
                 data = response.json()
                 server_reported_status = data.get("status", "UNKNOWN")
             except Exception:
                 pass
-                
+
             return latency_ms, "OK", server_reported_status
 
         except requests.exceptions.Timeout:
-            # SRE Practice: If a timeout is hit, return an artificial high ceiling value to force math anomaly flags.
+            # SRE Practice: Artificial ceiling to trip statistical anomaly math on hung threads
             return 3000.0, "TIMEOUT_ERROR", "DEGRADED"
         except requests.exceptions.ConnectionError:
-            # Handle severe crash cases where the server is completely shut off or blocked.
             return None, "CONNECTION_FAILURE", "OFFLINE"
+        except Exception as e:
+            return None, f"ERROR: {str(e)}", "UNKNOWN"
 
     def analyze_anomalies(self, current_latency):
         """
-        Statistical Processor Module: Calculates rolling Z-Scores across live time-series frames.
-        Enforces defensive cold-start controls to prevent algorithmic error generation.
+        Calculates rolling Z-Score: (current - mean) / std_dev.
+        Includes guards against cold-start and zero standard deviation.
         """
-        # COLD START GATEKEEPER: Do not generate statistical decisions until window density is reached.
-        if len(self.latency_window) < WINDOW_SIZE:
-            print(f"⏳ Ingesting baseline telemetry data... [{len(self.latency_window)}/{WINDOW_SIZE} collected]")
+        if len(self.latency_window) < self.window_size:
+            print(f"⏳ Ingesting baseline telemetry... [{len(self.latency_window)}/{self.window_size} samples collected]")
             return False, 0.0, 0.0, 0.0
 
-        # Leverage numpy to extract real-time statistical distribution traits of the rolling history.
-        mean_baseline = float(np.mean(self.latency_window))
-        std_dev_baseline = float(np.std(self.latency_window))
+        samples = np.array(self.latency_window)
+        mean_baseline = float(np.mean(samples))
+        std_dev_baseline = float(np.std(samples))
 
-        # EDGE CASE SHIELD: If standard deviation drops to zero (perfect speed), inflate slightly to evade zero-division.
+        # Avoid division by zero on perfectly uniform latency
         if std_dev_baseline == 0:
             std_dev_baseline = 0.001
 
-        # Standard Anomaly Deviation formula application: (Observation - Center Point) / Variance scale
         z_score = (current_latency - mean_baseline) / std_dev_baseline
-        
-        # Evaluate absolute deviation scale against our target production threshold parameters.
-        is_anomaly = abs(z_score) > Z_SCORE_THRESHOLD
-        
+        is_anomaly = abs(z_score) > self.threshold
+
         return is_anomaly, z_score, mean_baseline, std_dev_baseline
 
     def trigger_investigator(self, latency, z_score, mean, std_dev, error_type, server_status):
         """
-        Phase 3 Investigator Integration: Captures live structural telemetry data matrices upon anomaly validation.
-        Serializes comprehensive JSON context packets to act as localized RAG prompt models.
+        Deduplicates alerts and persists structured incident payload into reports/incident_reports/.
         """
-        # ALERT DEDUPLICATION PROTOCOL: If this out-of-bounds incident is already cataloged, abort loop duplication.
         if self.is_incident_active:
             return
 
-        # Activate structural incident lock tracking.
         self.is_incident_active = True
-        # Formulate highly structured human-auditable file indexing string parameters.
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Assemble high-fidelity JSON payload containing all necessary context dimensions.
+        samples = list(self.latency_window)
+        p50 = float(np.percentile(samples, 50)) if samples else 0.0
+        p95 = float(np.percentile(samples, 95)) if samples else 0.0
+        p99 = float(np.percentile(samples, 99)) if samples else 0.0
+
         incident_context = {
             "incident_id": f"INC_{timestamp_str}",
             "timestamp": datetime.now().isoformat(),
-            "target_endpoint": TARGET_URL,
+            "target_endpoint": self.target_url,
             "metrics": {
                 "observed_latency_ms": round(latency, 2),
                 "baseline_mean_ms": round(mean, 2),
                 "baseline_std_dev_ms": round(std_dev, 4),
                 "calculated_z_score": round(z_score, 2),
-                "threshold_sigma": Z_SCORE_THRESHOLD
+                "threshold_sigma": self.threshold,
+                "percentiles": {
+                    "p50_ms": round(p50, 2),
+                    "p95_ms": round(p95, 2),
+                    "p99_ms": round(p99, 2)
+                }
             },
             "infrastructure_context": {
                 "network_status": error_type,
                 "server_reported_health": server_status
             },
-            # Map the exact trailing history buffer state so the diagnostic engine can trace the trajectory.
-            "recent_latency_samples": [round(x, 2) for x in list(self.latency_window)]
+            "recent_latency_samples": [round(x, 2) for x in samples]
         }
 
-        # Structure filename path targets.
         report_filename = f"incident_{timestamp_str}.json"
         report_path = os.path.join(INCIDENT_REPORT_DIR, report_filename)
 
-        # Persist structured incident dump context safely into the shared storage mount folder.
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(incident_context, f, indent=4)
 
-        # Trigger high-visibility diagnostic warnings into the standard console execution monitor.
-        print("\n" + "!" * 60)
-        print(f"🔥 ANOMALY DETECTED AND VERIFIED! (Severity Scale: {z_score:.2f}σ)")
-        print(f"📈 Performance Trace Spiked: {latency:.2f}ms [Baseline Expected Mean: {mean:.2f}ms]")
-        print(f"🕵️‍♂️ Investigator Component Deployed: Incident footprint written to local workspace.")
-        print(f"📂 Audit Target Captured: {report_path}")
-        print("!" * 60 + "\n")
+        print("\n" + "!" * 70)
+        print(f"🚨 ANOMALY DETECTED AND VERIFIED (Z-Score: {z_score:.2f}σ > {self.threshold}σ)")
+        print(f"📈 Latency Spiked: {latency:.2f}ms (Baseline Mean: {mean:.2f}ms | p99: {p99:.2f}ms)")
+        print(f"📁 Incident context persisted: {report_path}")
+        print("!" * 70 + "\n")
 
     def run_observability_loop(self):
-        """
-        Infinite Operational Scraper Loop: Orchestrates network pings, mathematical sweeps, and recovery state drops.
-        """
-        print("🟢 Continuous infrastructure observability state active. Press Ctrl+C to terminate.")
-        
-        while True:
-            # Query the target service web metrics.
+        """Main non-blocking polling and evaluation loop."""
+        print("🟢 Continuous observability active. Monitoring health telemetry...")
+
+        while self.running:
             latency, network_status, server_status = self.fetch_telemetry()
-            
-            # If the network boundary successfully returns data, evaluate statistics.
+
             if latency is not None:
                 is_anomaly, z_score, mean, std_dev = self.analyze_anomalies(latency)
-                
-                # Dynamic terminal dashboard visual status indicators.
-                status_icon = "🟢" if not is_anomaly else "🚨"
-                
-                # RECOVERY RECOGNITION BOUNDARY: If system metrics descend below sigma limits, release alert suppression.
+                status_icon = "🚨" if is_anomaly else "🟢"
+
+                # Check for recovery back into acceptable bounds
                 if not is_anomaly and self.is_incident_active:
-                    print(f"\n✅ RECOVERY TRANSACTION: Telemetry normalized back within acceptable baseline sigma thresholds.\n")
+                    print(f"\n✅ RECOVERY: Telemetry normalized back within acceptable thresholds.\n")
                     self.is_incident_active = False
 
-                # Format and output real-time metric traces to the terminal console panel.
-                if len(self.latency_window) >= WINDOW_SIZE:
-                    print(f"{status_icon} Latency: {latency:.2f}ms | Z-Score: {z_score:.2f} | Running Mean: {mean:.2f}ms")
-                
-                # If statistical analysis detects out-of-bounds variance, trigger the investigator dump engine.
+                if len(self.latency_window) >= self.window_size:
+                    print(f"{status_icon} Latency: {latency:.2f}ms | Z-Score: {z_score:+.2f}σ | Rolling Mean: {mean:.2f}ms")
+
                 if is_anomaly:
                     self.trigger_investigator(latency, z_score, mean, std_dev, network_status, server_status)
-                
-                # Feed current operational parameters back into historical queue tracking arrays.
+
                 self.latency_window.append(latency)
-                
             else:
-                # System network state dropped completely flat. Handle system-wide outage boundaries.
-                print("❌ Target server connection dropped completely. Retrying telemetry harvest next frame...")
+                print(f"❌ Connection failure to {self.target_url}. Retrying...")
                 if not self.is_incident_active:
                     self.trigger_investigator(3000.0, 99.9, 0.0, 0.0, network_status, server_status)
 
-            # Rest the thread script execution for exactly 1.0 seconds to prevent denial-of-service traffic simulation.
-            time.sleep(1.0)
+            time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
-    # Instantiate and spin up the complete integrated Sentinel/Investigator core monitoring suite.
-    sentinel_bot = PolishedSentinel()
-    sentinel_bot.run_observability_loop()
+    sentinel = PolishedSentinel()
+    sentinel.run_observability_loop()

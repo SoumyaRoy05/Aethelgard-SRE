@@ -1,0 +1,69 @@
+# docker-compose.yml
+# ==============================================================================
+# 🛡️ AETHELGARD: ZERO-COST PRODUCTION DOCKER COMPOSE ORCHESTRATION
+# Runs the complete closed-loop AI-SRE monitoring harness locally at $0 cost.
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # 1. Target Microservice (Monitored App + Chaos Harness)
+  target-service:
+    build:
+      context: ./target_service
+      dockerfile: Dockerfile
+    container_name: aethelgard-target-service
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - aethelgard-net
+
+  # 2. Webhook Ingestion Gateway (Sentry / Prometheus Alert Receiver)
+  aethelgard-gateway:
+    build:
+      context: .
+      dockerfile: target_service/Dockerfile
+    container_name: aethelgard-gateway
+    command: ["uvicorn", "gateway.webhook_receiver:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./reports:/app/reports
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - target-service
+    networks:
+      - aethelgard-net
+
+  # 3. Sentinel Engine (Continuous Observability & Rolling Z-Score Anomaly Detector)
+  aethelgard-sentinel:
+    build:
+      context: .
+      dockerfile: target_service/Dockerfile
+    container_name: aethelgard-sentinel
+    command: ["python", "sentinel/sentinel_engine.py"]
+    volumes:
+      - ./reports:/app/reports
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TARGET_SERVICE_URL=http://target-service:8000/health
+      - SENTINEL_WINDOW_SIZE=20
+      - SENTINEL_Z_SCORE_THRESHOLD=3.0
+    depends_on:
+      - target-service
+    networks:
+      - aethelgard-net
+
+networks:
+  aethelgard-net:
+    driver: bridge
+
